@@ -1,0 +1,133 @@
+---
+# tasks file for mysql
+- name: yum config| config the yum repo
+  yum_repository:
+    name: mysql-base
+    file: Mysql-Base
+    baseurl: http://{{yum_repo_server}}/mysql
+    description: mysql repo
+    owner: root
+    group: root
+    mode: "0744"
+    enabled: True
+    gpgcheck: False
+
+- name: yum config| update the yum cache
+  yum:
+    state: present
+    update_cache: True
+
+- name: mysql install| install mysql*
+  yum:
+    name: mysql-commun*
+    state: present
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql install| restart mysql
+  service:
+    name: mysqld
+    enabled: True
+    state: restarted
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| get old passwd
+  shell: cat /var/log/mysqld.log | grep root@localhost | awk '{print $NF}'
+  register: root_old_password
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| update the mysql root old password
+  shell: mysql -uroot -p'{{root_old_password.stdout}}' --connect-expired-password -e "ALTER user root@'localhost' identified by '{{root_new_password}}';FLUSH PRIVILEGES;"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| remove the anonymous user
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "DELETE FROM mysql.user WHERE User='';"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip] 
+
+- name: mysql init| disallow root login remotely
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| check database test exist
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "show databases like '%test%';"
+  register: test_exist
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| remove test database
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "DROP DATABASE test;"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip] and test_exist.stdout != ""
+
+- name: mysql init| remove test database privileges
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%'"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql init| reload the privileges tables
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "FLUSH PRIVILEGES;"
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql install| config mysql
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf
+    owner: root
+    group: root
+    mode: "0644"
+    force: True
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql install| restart mysql
+  service:
+    name: mysqld
+    state: restarted
+  when: ansible_default_ipv4.address in [mysql_master_ip, mysql_slave_ip]
+
+- name: mysql -master| create sync user
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "create user '{{rsync_user_username}}'@'%' identified by '{{rsync_user_password}}';"
+  when: ansible_default_ipv4.address in [mysql_master_ip]
+
+- name: mysql -master| grant privileges
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "grant replication slave on *.* to '{{rsync_user_username}}'@'%';"
+  when: ansible_default_ipv4.address in [mysql_master_ip]
+
+- name: mysql -master| flush
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "flush privileges;"
+  when: ansible_default_ipv4.address in [mysql_master_ip]
+
+- name: mysql| get bin-log-file
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "show master status;" | grep mysql-bin | awk '{print $1}'
+  register: master_log_file
+  delegate_to: 192.168.255.12
+  when: ansible_default_ipv4.address in [mysql_slave_ip]
+
+- name: mysql| get bin-log-pos
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e 'show master status;' | grep mysql-bin | awk '{print $2}'
+  register: master_log_pos
+  delegate_to: 192.168.255.12
+  when: ansible_default_ipv4.address in [mysql_slave_ip]
+
+- name: mysql| config slave 
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e "change master to master_host='{{mysql_master_ip}}',master_user='{{rsync_user_username}}',master_password='{{rsync_user_password}}',master_log_file='{{master_log_file.stdout}}',master_log_pos={{master_log_pos.stdout}};"
+  when: ansible_default_ipv4.address in [mysql_slave_ip]
+
+- name: mysql| start slave
+  shell: mysql -uroot -p'{{root_new_password}}' --connect-expired-password -e 'start slave;'
+  when: ansible_default_ipv4.address in [mysql_slave_ip]
+
+- name: mysql-router| install
+  yum:
+    name: mysql-router
+    state: present
+  when: ansible_default_ipv4.address in [mysql_router_ip]
+
+- name: mysql-router| config
+  template:
+    src: mysqlrouter.conf.j2
+    dest: /etc/mysqlrouter/mysqlrouter.conf
+    force: True
+  when: ansible_default_ipv4.address in [mysql_router_ip]
+
+- name: mysql-router| start service
+  service:
+    name: mysqlrouter
+    enabled: True
+    state: restarted
+  when: ansible_default_ipv4.address in [mysql_router_ip]

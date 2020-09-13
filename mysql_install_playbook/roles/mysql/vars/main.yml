@@ -1,0 +1,24 @@
+---
+# vars file for mysql
+# mysql root new password
+root_new_password: Password@111.com
+
+# mysql router information
+mysql_router_ip: 192.168.255.15
+mysql_router_write_port: 3306
+mysql_router_read_port: 3307
+
+# mysql master information
+mysql_master_ip: 192.168.255.12
+mysql_master_port: 3306
+
+# mysql slave information
+mysql_slave_ip: 192.168.255.13
+mysql_slave_port: 3306
+
+# yum repo information
+yum_repo_server: 192.168.255.14
+
+# mysql user information
+rsync_user_username: mysql_sync
+rsync_user_password: Password@111.com

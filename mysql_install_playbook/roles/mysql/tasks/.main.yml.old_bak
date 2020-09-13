@@ -1,0 +1,150 @@
+---
+# tasks file for mysql
+- name: yum config| config the yum repo
+  yum_repository:
+    name: mysql-base
+    file: Mysql-Base
+    baseurl: http://192.168.255.14/mysql
+    description: mysql repo
+    owner: root
+    group: root
+    mode: "0744"
+    enabled: True
+    gpgcheck: False
+
+- name: yum config| update the yum cache
+  yum:
+    state: present
+    update_cache: True
+
+
+
+- name: mysql install| install mysql*
+  yum:
+    name: mysql-commun*
+    state: present
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql install| set variables
+  shell: echo "0"
+  register: mysql_inited
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| show variables
+  debug: var=mysql_inited
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql install| config mysql
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf
+    owner: root
+    group: root
+    mode: "0644"
+    force: True
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql install| restart mysql
+  service:
+    name: mysqld
+    enabled: True
+    state: restarted
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+
+#- name: mysql init| get old passwd
+#  shell: cat /var/log/mysqld.log | grep root@localhost | awk '{print $NF}'
+#  register: root_old_password
+#  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| update the mysql root old password
+  shell: mysql -uroot -e "UPDATE mysql.user SET authentication_string=password('{{root_new_password}}') WHERE User='root' and Host='localhost';"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| remove the anonymous user
+  shell: mysql -uroot -e "DELETE FROM mysql.user WHERE User='';"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"] 
+
+- name: mysql init| disallow root login remotely
+  shell: mysql -uroot -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| check database test exist
+  shell: mysql -uroot -e "show databases like '%test%';"
+  register: test_exist
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| remove test database
+  shell: mysql -uroot -e "DROP DATABASE test;"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"] and test_exist.stdout != ""
+
+- name: mysql init| remove test database privileges
+  shell: mysql -uroot -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%'"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| reload the privileges tables
+  shell: mysql -uroot -e "FLUSH PRIVILEGES;"
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| set variables
+  shell: echo "1"
+  register: mysql_inited
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql init| show variables
+  debug: var=mysql_inited
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql install| config mysql
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf
+    owner: root
+    group: root
+    mode: "0644"
+    force: True
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+- name: mysql install| restart mysql
+  service:
+    name: mysqld
+    state: restarted
+  when: ansible_default_ipv4.address in ["192.168.255.12", "192.168.255.13"]
+
+
+
+- name: mysql -master| create sync user
+  shell: mysql -e "create user 'mysql_sync'@'%' identified by 'Lwfcao.111';" -uroot -p'{{root_new_password}}'
+  when: ansible_default_ipv4.address in ["192.168.255.12"]
+
+- name: mysql -master| grant privileges
+  shell: mysql -e "grant replication slave on *.* to 'mysql_sync'@'%';" -uroot -p'{{root_new_password}}'
+  when: ansible_default_ipv4.address in ["192.168.255.12"]
+
+- name: mysql -master| flush
+  shell: mysql -e "flush privileges;" -uroot -p'{{root_new_password}}'
+  when: ansible_default_ipv4.address in ["192.168.255.12"]
+
+- name: mysql| get bin-log-file
+  shell: mysql -e "show master status;" -uroot -p'{{root_new_password}}' | grep mysql-bin | awk '{print $1}'
+  register: master_log_file
+  delegate_to: 192.168.255.12
+  when: ansible_default_ipv4.address in ["192.168.255.13"]
+
+- name: mysql| get bin-log-pos
+  shell: mysql -e 'show master status;' -uroot -p'{{root_new_password}}' | grep mysql-bin | awk '{print $2}'
+  register: master_log_pos
+  delegate_to: 192.168.255.12
+  when: ansible_default_ipv4.address in ["192.168.255.13"]
+
+- name: mysql| config slave 
+  shell: mysql -uroot -p'Lwfcao.111' -e "change master to master_host='192.168.255.12',master_user='mysql_sync',master_password='Lwfcao.111',master_log_file='{{master_log_file.stdout}}',master_log_pos={{master_log_pos.stdout}};"
+  when: ansible_default_ipv4.address in ["192.168.255.13"]
+
+- name: mysql| start slave
+  shell: mysql -e -uroot -p'Lwfcao.111' -e 'start slave;'
+
+
+
+
+
